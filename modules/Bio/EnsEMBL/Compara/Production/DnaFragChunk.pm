@@ -111,78 +111,32 @@ sub slice {
 
 =head2 fetch_masked_sequence
 
-  Description: Meta method which uses the slice associated with this chunk
-               and from the external core database associated with the slice
-               it extracts the masked DNA sequence.
-               Returns as Bio::Seq object.  does not cache sequence internally
-  Arg [1]    : (int or string) masked status of the sequence [optional]
-                0 or ''     = unmasked (default)
-                1 or 'hard' = masked
-                2 or 'soft' = soft-masked
-  Arg[2]     : (ref to hash) hash of masking options [optional]
-  Example    : $bioseq = $chunk->get_sequence(1);
-  Returntype : Bio::Seq or undef if a problem
+  Description: Return the sequence of this genomic location. If possible, the
+               sequence will be read from an indexed Fasta file; otherwise from
+               the core database. It will return an unmasked sequence unless
+               indicated otherwise previously with masking_options().
+  Example    : $seq = $chunk->fetch_masked_sequence();
+  Returntype : String
   Exceptions : none
-  Caller     : general
 
 =cut
 
 sub fetch_masked_sequence {
   my $self = shift;
   
-  return undef unless($self->dnafrag);
-  return undef unless($self->dnafrag->genome_db);
-  return undef unless(my $dba = $self->dnafrag->genome_db->db_adaptor);
-  my $seq;
-  $dba->dbc->prevent_disconnect( sub {
-      $seq = $self->_fetch_masked_sequence();
-  } );
-  return $seq;
-}
-
-sub _fetch_masked_sequence {
-  my $self = shift;
-
-  return undef unless(my $slice = $self->slice());
-
-  my $seq;
-  my $id = $self->display_id;
-  my $masking_options;
-  my $starttime = time();
-
-  if(defined($self->masking_options)) {
-    $masking_options = eval($self->masking_options);
-    my $logic_names = $masking_options->{'logic_names'};
-    my $soft_masking = $masking_options->{'default_soft_masking'} // 1;
-    #printf("getting %s masked sequence...\n", $soft_masking ? 'SOFT' : 'HARD');
-
-    my $masked_slice = $slice->get_repeatmasked_seq($logic_names, $soft_masking, $masking_options);
-    $seq = Bio::PrimarySeq->new( -id => $id, -seq => $masked_slice->seq);
-  }
-  else {  # no masking options set, so get unmasked sequence
-    #print "getting UNMASKED sequence...\n";
-    $seq = Bio::PrimarySeq->new( -id => $id, -seq => $slice->seq);
-  }
-
-  #print ((time()-$starttime), " secs\n");
-
-  #print STDERR "sequence length : ",$seq->length,"\n";
-  $seq = $seq->seq;
-
-  if (defined $masking_options) {
-    foreach my $ae (@{$slice->get_all_AssemblyExceptionFeatures}) {
-      next unless (defined $masking_options->{"assembly_exception_type_" . $ae->type});
-      my $length = $ae->end - $ae->start + 1;
-      if ($masking_options->{"assembly_exception_type_" . $ae->type} == 0) {
-        my $padstr = 'N' x $length;
-        substr ($seq, $ae->start, $length) = $padstr;
-      } elsif ($masking_options->{"assembly_exception_type_" . $ae->type} == 1) {
-        my $padstr = lc substr ($seq, $ae->start, $length);
-        substr ($seq, $ae->start, $length) = $padstr;
+  my ($mask, $seq);
+  if (defined $self->masking_options) {
+      my $masking_options = eval($self->masking_options);
+      if (exists $masking_options->{'default_soft_masking'}) {
+          $mask = $masking_options->{'default_soft_masking'} ? 'soft' : 'hard';
+      } else {
+          $mask = 'soft';
       }
-    }
+  } else {
+      # Unmasked sequence
+      $mask = undef;
   }
-
+  $seq = $self->get_sequence($mask);
   $self->sequence($seq);
   return $seq;
 }
@@ -230,15 +184,9 @@ sub display_id {
 
 sub bioseq {
   my $self = shift;
-
-  my $seq_str = $self->sequence();
-  if(not defined $seq_str) {
-    $seq_str = $self->fetch_masked_sequence;
-  }
   
-  return Bio::Seq->new(-seq        => $seq_str,
+  return Bio::Seq->new(-seq        => $self->sequence(),
                        -display_id => $self->display_id(),
-                       -primary_id => $self->sequence_id(),
                        );
 }
 
@@ -255,24 +203,14 @@ sub dnafrag_chunk_set_id {
   return $self->{'dnafrag_chunk_set_id'};
 }
 
-sub sequence_id {
-  my $self = shift;
-  return $self->{'sequence_id'} = shift if(@_);
-  return $self->{'sequence_id'};
-}
-
 sub sequence {
   my $self = shift;
   if(@_) {
     $self->{'_sequence'} = shift;
-    $self->sequence_id(0);
   }
 
-  return $self->{'_sequence'} if(defined($self->{'_sequence'}));
-
-  #lazy load the sequence if sequence_id is set
-  if(defined($self->sequence_id()) and defined($self->adaptor())) {
-    $self->{'_sequence'} = $self->adaptor->db->get_SequenceAdaptor->fetch_by_dbID($self->sequence_id);
+  if (! defined $self->{'_sequence'}) {
+      $self->fetch_masked_sequence();
   }
   return $self->{'_sequence'};
 }
