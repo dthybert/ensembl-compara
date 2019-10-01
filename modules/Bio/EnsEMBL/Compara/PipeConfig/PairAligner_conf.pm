@@ -100,8 +100,6 @@ sub default_options {
 
         #min length to dump
         'dump_min_nib_size'         => 11500000,
-        'dump_min_chunk_size'       => 1000000,
-        'dump_min_chunkset_size'    => 1000000,
 
 	#Use 'quick' method for finding max alignment length (ie max(genomic_align_block.length)) rather than the more
 	#accurate method of max(genomic_align.dnafrag_end-genomic_align.dnafrag_start+1)
@@ -218,6 +216,7 @@ sub pipeline_wide_parameters {
     return {
         'skip_pairaligner_stats'    => $self->o('skip_pairaligner_stats'),
         'patch_alignments'          => $self->o('patch_alignments'),
+        'genome_dumps_dir'          => $self->o('genome_dumps_dir'),
     };
 }
 
@@ -255,7 +254,6 @@ sub pipeline_analyses {
     $self->o('max_percent_diff_patches');
 
     return [
-	    # ---------------------------------------------[Turn all tables except 'genome_db' to InnoDB]---------------------------------------------
 	    {   -logic_name    => 'get_species_list',
 		-module        => 'Bio::EnsEMBL::Compara::RunnableDB::PairAligner::ParsePairAlignerConf',
 		-parameters    => { 
@@ -346,22 +344,14 @@ sub pipeline_analyses {
  	    {  -logic_name => 'store_sequence',
  	       -hive_capacity => 100,
  	       -module     => 'Bio::EnsEMBL::Compara::RunnableDB::PairAligner::StoreSequence',
-               -parameters => {
-                   'dump_min_chunkset_size' => $self->o('dump_min_chunkset_size'),
-                   'dump_min_chunk_size' => $self->o('dump_min_chunk_size'),
-               },
 	       -flow_into => {
- 	          -1 => [ 'store_sequence_again' ],
+ 	          -1 => [ 'store_sequence_himem' ],
  	       },
 	       -rc_name => '2Gb_job',
   	    },
- 	    {  -logic_name => 'store_sequence_again',
+ 	    {  -logic_name => 'store_sequence_himem',
  	       -hive_capacity => 50,
  	       -module     => 'Bio::EnsEMBL::Compara::RunnableDB::PairAligner::StoreSequence',
-               -parameters => {
-                   'dump_min_chunkset_size' => $self->o('dump_min_chunkset_size'),
-                   'dump_min_chunk_size' => $self->o('dump_min_chunk_size'),
-               },
 	       -can_be_empty  => 1,
 	       -rc_name => '4Gb_job',
   	    },
@@ -371,7 +361,7 @@ sub pipeline_analyses {
                                'mix_cellular_components' => $self->o('mix_cellular_components'),
                               },
 	       -hive_capacity => 10,
- 	       -wait_for => [ 'store_sequence', 'store_sequence_again', 'chunk_and_group_dna'  ],
+ 	       -wait_for => [ 'store_sequence', 'store_sequence_himem', 'chunk_and_group_dna'  ],
 	       -flow_into => {
 			       1 => [ 'check_no_partial_gabs' ],
 			       2 => [ $self->o('pair_aligner_logic_name')  ],
